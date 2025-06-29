@@ -1,0 +1,697 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Jun 22 18:36:55 2025
+
+@author: amits
+"""
+
+# -*- coding: utf-8 -*-
+"""
+XGBoost and SVC Hyperparameter Tuning with Model Saving
+Focus on finding optimal stopping points using only training data
+"""
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, TimeSeriesSplit
+from sklearn.svm import SVC
+from sklearn.metrics import classification_report, accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+import warnings
+import joblib
+import json
+import os
+
+
+from datetime import datetime
+warnings.filterwarnings('ignore')
+
+# Set style for better plots
+plt.style.use('seaborn-v0_8')
+sns.set_palette("husl")
+
+
+class ModelSaveLoadSystem:
+    """
+    Comprehensive system to save and load trained models with metadata
+    """
+    
+    def __init__(self, base_directory="saved_models"):
+        """
+        Initialize the model save/load system
+        
+        Parameters:
+        -----------
+        base_directory : str
+            Directory where models will be saved
+        """
+        self.base_directory = base_directory
+        self.ensure_directory_exists()
+    
+    def ensure_directory_exists(self):
+        """Create the base directory if it doesn't exist"""
+        if not os.path.exists(self.base_directory):
+            os.makedirs(self.base_directory)
+            print(f"📁 Created directory: {self.base_directory}")
+    
+    def save_model_package(self, model, model_name, feature_names, cv_score, 
+                          best_params, cv_results=None, training_info=None):
+        """
+        Save a complete model package with all metadata
+        
+        Parameters:
+        -----------
+        model : sklearn model
+            Trained model to save
+        model_name : str
+            Name of the model (e.g., 'XGBoost', 'SVC')
+        feature_names : list
+            List of feature names used for training
+        cv_score : float
+            Cross-validation score
+        best_params : dict
+            Best hyperparameters found
+        cv_results : dict
+            Cross-validation results (optional)
+        training_info : dict
+            Additional training information (optional)
+        
+        Returns:
+        --------
+        dict : Information about saved files
+        """
+        
+        # Generate timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_filename = f"{model_name.lower()}_model_{timestamp}"
+        
+        # File paths
+        model_path = os.path.join(self.base_directory, f"{base_filename}.joblib")
+        metadata_path = os.path.join(self.base_directory, f"{base_filename}_metadata.json")
+        features_path = os.path.join(self.base_directory, f"{base_filename}_features.txt")
+        
+        # Prepare comprehensive metadata
+        metadata = {
+            'model_name': model_name,
+            'model_type': str(type(model).__name__),
+            'timestamp': timestamp,
+            'datetime': datetime.now().isoformat(),
+            'cv_score': float(cv_score),
+            'best_params': best_params,
+            'feature_count': len(feature_names),
+            'feature_names': feature_names,
+            'model_file': f"{base_filename}.joblib",
+            'features_file': f"{base_filename}_features.txt"
+        }
+        
+        # Add CV results if provided
+        if cv_results is not None:
+            metadata['cv_results'] = {
+                'mean_test_score': float(cv_results.get('mean_test_score', 0)),
+                'std_test_score': float(cv_results.get('std_test_score', 0)),
+                'individual_fold_scores': [float(x) for x in cv_results.get('individual_scores', [])]
+            }
+        
+        # Add training info if provided
+        if training_info is not None:
+            metadata['training_info'] = training_info
+        
+        # Save model
+        model_package = {
+            'model': model,
+            'metadata': metadata
+        }
+        joblib.dump(model_package, model_path)
+        
+        # Save metadata as JSON (human readable)
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        # Save feature names
+        with open(features_path, 'w') as f:
+            for feature in feature_names:
+                f.write(f"{feature}\n")
+        
+        # Print confirmation
+        print(f"✅ Model saved successfully!")
+        print(f"   📁 Model: {model_path}")
+        print(f"   📋 Metadata: {metadata_path}")
+        print(f"   📝 Features: {features_path}")
+        print(f"   🎯 CV Score: {cv_score:.4f}")
+        
+        return {
+            'model_path': model_path,
+            'metadata_path': metadata_path,
+            'features_path': features_path,
+            'metadata': metadata
+        }
+    
+    def list_saved_models(self):
+        """
+        List all saved models in the directory
+        
+        Returns:
+        --------
+        pd.DataFrame : Summary of all saved models
+        """
+        
+        model_files = [f for f in os.listdir(self.base_directory) if f.endswith('.joblib')]
+        
+        if not model_files:
+            print(f"📭 No models found in {self.base_directory}")
+            return pd.DataFrame()
+        
+        models_info = []
+        
+        for model_file in model_files:
+            try:
+                model_path = os.path.join(self.base_directory, model_file)
+                package = joblib.load(model_path)
+                metadata = package['metadata']
+                
+                models_info.append({
+                    'file_name': model_file,
+                    'file_path': model_path,
+                    'model_name': metadata.get('model_name', 'Unknown'),
+                    'model_type': metadata.get('model_type', 'Unknown'),
+                    'cv_score': metadata.get('cv_score', 0),
+                    'feature_count': metadata.get('feature_count', 0),
+                    'timestamp': metadata.get('datetime', 'Unknown'),
+                    'best_params': str(metadata.get('best_params', {}))[:100] + "..."
+                })
+                
+            except Exception as e:
+                print(f"⚠️ Error reading {model_file}: {e}")
+        
+        if models_info:
+            df = pd.DataFrame(models_info)
+            df = df.sort_values('cv_score', ascending=False)  # Best models first
+            return df
+        else:
+            return pd.DataFrame()
+    
+    def load_model(self, model_path):
+        """
+        Load a saved model package
+        
+        Parameters:
+        -----------
+        model_path : str
+            Path to the saved model file
+        
+        Returns:
+        --------
+        dict : Model package with model and metadata
+        """
+        
+        try:
+            package = joblib.load(model_path)
+            print(f"✅ Model loaded successfully from: {model_path}")
+            print(f"   🏷️ Model: {package['metadata']['model_name']}")
+            print(f"   🎯 CV Score: {package['metadata']['cv_score']:.4f}")
+            print(f"   📊 Features: {package['metadata']['feature_count']}")
+            return package
+        
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            return None
+
+
+def comprehensive_xgb_svc_tuning_with_saving(X_train, y_train, save_models=True, 
+                                            models_directory="saved_models"):
+    """
+    Comprehensive hyperparameter tuning for XGBoost and SVC with model saving
+    """
+    
+    print("🚀 XGBoost & SVC HYPERPARAMETER TUNING PIPELINE WITH MODEL SAVING")
+    print("="*70)
+    
+    print(f"Training samples: {len(X_train)}")
+    print(f"Features: {X_train.shape[1]}")
+    print(f"Class distribution - Train: {dict(y_train.value_counts(normalize=True).round(3))}")
+    
+    # Initialize model saver
+    if save_models:
+        model_saver = ModelSaveLoadSystem(models_directory)
+    
+    # Get feature names
+    feature_names = X_train.columns.tolist()
+    
+    # Time series cross-validation
+    tscv = TimeSeriesSplit(n_splits=5)
+    
+    # ================================================================
+    # XGBOOST HYPERPARAMETER TUNING
+    # ================================================================
+    
+    try:
+        from xgboost import XGBClassifier
+        print("\n🔄 XGBoost Hyperparameter Tuning...")
+        
+        # Base XGBoost model
+        xgb_base = XGBClassifier(
+            random_state=42,
+            eval_metric='logloss',
+            verbosity=0,
+            n_jobs=-1
+        )
+        
+        # Step 1: Coarse grid search
+        print("  📊 Step 1: Coarse parameter search...")
+        xgb_coarse_params = {
+            'n_estimators': [100, 200, 300],
+            'max_depth': [3, 4, 5, 6],
+            'learning_rate': [0.01, 0.1, 0.2],
+            'subsample': [0.8, 0.9, 1.0],
+            'colsample_bytree': [0.8, 0.9, 1.0]
+        }
+        
+        xgb_coarse_search = RandomizedSearchCV(
+            xgb_base,
+            xgb_coarse_params,
+            n_iter=30,
+            cv=tscv,
+            scoring='accuracy',
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        xgb_coarse_search.fit(X_train, y_train)
+        print(f"  ✅ Coarse search complete. Best CV Score: {xgb_coarse_search.best_score_:.4f}")
+        print(f"  📋 Best coarse params: {xgb_coarse_search.best_params_}")
+                 
+        # Step 2: Fine-tuned search around best parameters
+        print("  🎯 Step 2: Fine-tuned parameter search...")
+        best_coarse = xgb_coarse_search.best_params_
+        
+        # Create fine-tuned ranges around best coarse parameters
+        xgb_fine_params = {
+            'n_estimators': [max(50, best_coarse['n_estimators']-50), 
+                           best_coarse['n_estimators'], 
+                           best_coarse['n_estimators']+50],
+            'max_depth': [max(2, best_coarse['max_depth']-1), 
+                         best_coarse['max_depth'], 
+                         min(8, best_coarse['max_depth']+1)],
+            'learning_rate': [max(0.01, best_coarse['learning_rate']-0.05), 
+                            best_coarse['learning_rate'], 
+                            min(0.3, best_coarse['learning_rate']+0.05)],
+            'subsample': [0.8, 0.9, 1.0],
+            'colsample_bytree': [0.8, 0.9, 1.0],
+            'reg_alpha': [0, 0.1, 1],
+            'reg_lambda': [1, 1.5, 2]
+        }
+        
+        xgb_fine_search = GridSearchCV(
+            xgb_base,
+            xgb_fine_params,
+            cv=tscv,
+            scoring='accuracy',
+            n_jobs=-1
+        )
+        
+        xgb_fine_search.fit(X_train, y_train)
+        xgb_best_model = xgb_fine_search.best_estimator_
+        
+        # Get detailed CV results
+        cv_results = xgb_fine_search.cv_results_
+        best_index = xgb_fine_search.best_index_
+        
+        # Extract individual fold scores
+        individual_scores = []
+        for fold in range(5):
+            fold_key = f'split{fold}_test_score'
+            if fold_key in cv_results:
+                score = cv_results[fold_key][best_index]
+                individual_scores.append(score)
+                print(f"Fold {fold+1}: {score:.4f}")
+        
+        print(f"  ✅ Fine search complete. Best CV Score: {xgb_fine_search.best_score_:.4f}")
+        print(f"  🏆 Final XGB params: {xgb_fine_search.best_params_}")
+        
+        # Save XGBoost model
+        if save_models:
+            xgb_cv_results = {
+                'mean_test_score': cv_results['mean_test_score'][best_index],
+                'std_test_score': cv_results['std_test_score'][best_index],
+                'individual_scores': individual_scores
+            }
+            
+            xgb_training_info = {
+                'coarse_search_score': xgb_coarse_search.best_score_,
+                'coarse_search_params': xgb_coarse_search.best_params_,
+                'fine_search_iterations': len(cv_results['mean_test_score']),
+                'dataset_shape': X_train.shape
+            }
+            
+            xgb_save_info = model_saver.save_model_package(
+                model=xgb_best_model,
+                model_name='XGBoost',
+                feature_names=feature_names,
+                cv_score=xgb_fine_search.best_score_,
+                best_params=xgb_fine_search.best_params_,
+                cv_results=xgb_cv_results,
+                training_info=xgb_training_info
+            )
+        
+    except ImportError:
+        print("❌ XGBoost not available")
+        xgb_best_model = None
+        xgb_fine_search = None
+        xgb_save_info = None
+    
+    # ================================================================
+    # SVC HYPERPARAMETER TUNING
+    # ================================================================
+    
+    print("\n🔄 SVC Hyperparameter Tuning...")
+    
+    # Base SVC model
+    svc_base = SVC(
+        kernel='rbf',
+        random_state=42,
+        probability=True
+    )
+    
+    # Step 1: Coarse grid search
+    print("  📊 Step 1: Coarse parameter search...")
+    svc_coarse_params = {
+        'C': [0.1, 1, 10, 100],
+        'gamma': ['scale', 'auto', 0.001, 0.01, 0.1, 1],
+        'class_weight': [None, 'balanced']
+    }
+    
+    svc_coarse_search = GridSearchCV(
+        svc_base,
+        svc_coarse_params,
+        cv=tscv,
+        scoring='accuracy',
+        n_jobs=-1
+    )
+    
+    svc_coarse_search.fit(X_train, y_train)
+    print(f"  ✅ Coarse search complete. Best CV Score: {svc_coarse_search.best_score_:.4f}")
+    print(f"  📋 Best coarse params: {svc_coarse_search.best_params_}")
+    
+    # Step 2: Fine-tuned search
+    print("  🎯 Step 2: Fine-tuned parameter search...")
+    best_coarse_svc = svc_coarse_search.best_params_
+    
+    # Create fine ranges around best coarse parameters
+    base_C = best_coarse_svc['C'] if isinstance(best_coarse_svc['C'], (int, float)) else 1
+    svc_fine_params = {
+        'C': [base_C/2, base_C, base_C*2],
+        'gamma': [best_coarse_svc['gamma']] if best_coarse_svc['gamma'] in ['scale', 'auto'] 
+                else [best_coarse_svc['gamma']/2, best_coarse_svc['gamma'], best_coarse_svc['gamma']*2],
+        'class_weight': [best_coarse_svc['class_weight']]
+    }
+    
+    svc_fine_search = GridSearchCV(
+        svc_base,
+        svc_fine_params,
+        cv=tscv,
+        scoring='accuracy',
+        n_jobs=-1
+    )
+    
+    svc_fine_search.fit(X_train, y_train)
+    svc_best_model = svc_fine_search.best_estimator_
+    
+    print(f"  ✅ Fine search complete. Best CV Score: {svc_fine_search.best_score_:.4f}")
+    print(f"  🏆 Final SVC params: {svc_fine_search.best_params_}")
+    
+    # Save SVC model
+    if save_models:
+        svc_cv_results = svc_fine_search.cv_results_
+        svc_best_index = svc_fine_search.best_index_
+        
+        svc_individual_scores = []
+        for fold in range(5):
+            fold_key = f'split{fold}_test_score'
+            if fold_key in svc_cv_results:
+                score = svc_cv_results[fold_key][svc_best_index]
+                svc_individual_scores.append(score)
+        
+        svc_cv_results_summary = {
+            'mean_test_score': svc_cv_results['mean_test_score'][svc_best_index],
+            'std_test_score': svc_cv_results['std_test_score'][svc_best_index],
+            'individual_scores': svc_individual_scores
+        }
+        
+        svc_training_info = {
+            'coarse_search_score': svc_coarse_search.best_score_,
+            'coarse_search_params': svc_coarse_search.best_params_,
+            'fine_search_iterations': len(svc_cv_results['mean_test_score']),
+            'dataset_shape': X_train.shape
+        }
+        
+        svc_save_info = model_saver.save_model_package(
+            model=svc_best_model,
+            model_name='SVC',
+            feature_names=feature_names,
+            cv_score=svc_fine_search.best_score_,
+            best_params=svc_fine_search.best_params_,
+            cv_results=svc_cv_results_summary,
+            training_info=svc_training_info
+        )
+    
+    # ================================================================
+    # MODEL COMPARISON (CV SCORES ONLY - NO TEST DATA)
+    # ================================================================
+    
+    print("\n🏆 MODEL COMPARISON (Cross-Validation Scores)")
+    print("="*60)
+    
+    results = {}
+    
+    if xgb_best_model:
+        results['XGBoost'] = {
+            'Best_CV_Score': xgb_fine_search.best_score_,
+            'Best_Params': xgb_fine_search.best_params_,
+            'Model': xgb_best_model,
+            'Save_Info': xgb_save_info if save_models else None
+        }
+    
+    results['SVC'] = {
+        'Best_CV_Score': svc_fine_search.best_score_,
+        'Best_Params': svc_fine_search.best_params_,
+        'Model': svc_best_model,
+        'Save_Info': svc_save_info if save_models else None
+    }
+    
+    # Create comparison table
+    comparison_df = pd.DataFrame({
+        name: [data['Best_CV_Score']] for name, data in results.items()
+    }, index=['CV_Accuracy'])
+    
+    print("\nCross-Validation Performance:")
+    print(comparison_df.round(4))
+    
+    # Determine best model based on CV score
+    best_model_name = comparison_df.loc['CV_Accuracy'].idxmax()
+    best_cv_score = comparison_df.loc['CV_Accuracy'].max()
+    
+    print(f"\n🏆 BEST MODEL (by CV): {best_model_name}")
+    print(f"Cross-Validation Accuracy: {best_cv_score:.4f}")
+    print(f"Best Parameters: {results[best_model_name]['Best_Params']}")
+    
+    # ================================================================
+    # SAVE RESULTS SUMMARY
+    # ================================================================
+    
+    results_summary = []
+    for model_name, model_data in results.items():
+        summary_row = {
+            'Model': model_name,
+            'CV_Accuracy': model_data['Best_CV_Score'],
+            'Best_Params': str(model_data['Best_Params']),
+            'Model_File': model_data['Save_Info']['model_path'] if model_data['Save_Info'] else 'Not Saved'
+        }
+        results_summary.append(summary_row)
+    
+    results_df = pd.DataFrame(results_summary)
+    results_df.to_excel('Hyperparameter_Tuning_Results_XGB_SVC.xlsx', index=False)
+    
+    print(f"\n💾 Results saved to: Hyperparameter_Tuning_Results_XGB_SVC.xlsx")
+    
+    if save_models:
+        print(f"\n📁 Models saved in directory: {models_directory}")
+        print("🔍 Use ModelSaveLoadSystem to list and load saved models")
+        
+        # Show saved models
+        saved_models_df = model_saver.list_saved_models()
+        if not saved_models_df.empty:
+            print("\n📋 Saved Models Summary:")
+            display_cols = ['model_name', 'cv_score', 'feature_count', 'timestamp']
+            print(saved_models_df[display_cols].to_string(index=False))
+    
+    return {
+        'results': results,
+        'best_model_name': best_model_name,
+        'best_model': results[best_model_name]['Model'],
+        'comparison_df': comparison_df,
+        'model_saver': model_saver if save_models else None,
+        'feature_names': feature_names
+    }
+
+
+def remove_correlated_pairs_by_rank(prospective_features_df, correlation_df, feature_col='feature', rank_col='rank'):
+    """
+    Remove correlated feature pairs based on importance ranking.
+    Keep the feature with LOWER rank (more important) and remove the one with HIGHER rank (less important).
+    
+    Parameters:
+    -----------
+    prospective_features_df : DataFrame
+        DataFrame with columns for feature names and their ranks
+        Example: ['feature', 'rank'] where lower rank = more important
+    correlation_df : DataFrame  
+        DataFrame with 2 columns showing correlated pairs
+        Example: ['feature1', 'feature2'] where each row is a correlated pair
+    feature_col : str
+        Column name containing feature names in prospective_features_df
+    rank_col : str  
+        Column name containing ranks in prospective_features_df (lower = better)
+    
+    Returns:
+    --------
+    final_features_df : DataFrame
+        Cleaned DataFrame with no correlated pairs
+    removed_features : list
+        Features that were removed due to correlation
+    correlation_info : list
+        Info about which pairs were found and resolved
+    """
+    
+    # Copy input to avoid modifying original
+    remaining_features_df = prospective_features_df.copy()
+    removed_features = []
+    correlation_info = []
+    
+    # Create lookup dictionary for easy rank access
+    feature_rank_dict = dict(zip(prospective_features_df[feature_col], prospective_features_df[rank_col]))
+    
+    # Get column names from correlation dataframe
+    col1, col2 = correlation_df.columns[0], correlation_df.columns[1]
+    
+    # Process each correlated pair row by row
+    for idx, row in correlation_df.iterrows():
+        feature_a = row[col1]
+        feature_b = row[col2]
+        
+        # Check if both features are in our prospective list
+        has_a = feature_a in feature_rank_dict
+        has_b = feature_b in feature_rank_dict
+        
+        if has_a and has_b:
+            # Both features present - compare ranks and remove worse one
+            rank_a = feature_rank_dict[feature_a]
+            rank_b = feature_rank_dict[feature_b]
+            
+            if rank_a < rank_b:
+                # Feature A has better rank (lower number) - keep A, remove B
+                keep_feature = feature_a
+                remove_feature = feature_b
+                keep_rank = rank_a
+                remove_rank = rank_b
+            else:
+                # Feature B has better rank (lower number) - keep B, remove A  
+                keep_feature = feature_b
+                remove_feature = feature_a
+                keep_rank = rank_b
+                remove_rank = rank_a
+            
+            # Remove the worse feature from our dataframe
+            remaining_features_df = remaining_features_df[remaining_features_df[feature_col] != remove_feature]
+            removed_features.append(remove_feature)
+            
+            # Update lookup dict
+            del feature_rank_dict[remove_feature]
+            
+            # Track what happened
+            correlation_info.append({
+                'correlated_pair': (feature_a, feature_b),
+                'kept': keep_feature,
+                'kept_rank': keep_rank,
+                'removed': remove_feature,
+                'removed_rank': remove_rank,
+                'reason': f'Removed {remove_feature} (rank {remove_rank}) kept {keep_feature} (rank {keep_rank})'
+            })
+            
+        elif has_a and not has_b:
+            # Only feature_a in list - no conflict
+            correlation_info.append({
+                'correlated_pair': (feature_a, feature_b),
+                'kept': feature_a,
+                'kept_rank': feature_rank_dict[feature_a],
+                'removed': None,
+                'removed_rank': None,
+                'reason': f'{feature_b} not in prospective list - no conflict'
+            })
+            
+        elif has_b and not has_a:
+            # Only feature_b in list - no conflict  
+            correlation_info.append({
+                'correlated_pair': (feature_a, feature_b),
+                'kept': feature_b,
+                'kept_rank': feature_rank_dict[feature_b],
+                'removed': None,
+                'removed_rank': None,
+                'reason': f'{feature_a} not in prospective list - no conflict'
+            })
+        
+        else:
+            # Neither feature in list - no action needed
+            correlation_info.append({
+                'correlated_pair': (feature_a, feature_b),
+                'kept': None,
+                'kept_rank': None,
+                'removed': None,
+                'removed_rank': None,
+                'reason': 'Neither feature in prospective list'
+            })
+    
+    return remaining_features_df, removed_features, correlation_info
+
+
+# ================================================================
+# USAGE
+# ================================================================
+
+if __name__ == "__main__":
+    # Load your data
+    df_Train_data = pd.read_excel("C:\\Users\\amits\\Desktop\\All quant workshop\\OAS prediction\\HYG,JNK prediction steps\\Step-2-Choose relevant 20 features\\Good-Simple time series split\\All scaled Train Features and Target data.xlsx")
+    Selected_features = pd.read_excel("C:\\Users\\amits\\Desktop\\All quant workshop\OAS prediction\\HYG,JNK prediction steps\\Step-2-Choose relevant 20 features\\Good-Simple time series split\\Performance_Weighted_Feature_Rankings.xlsx")
+    Correlated_Pairs = pd.read_excel("C:\\Users\\amits\\Desktop\\All quant workshop\\OAS prediction\\HYG,JNK prediction steps\\Step-2-Choose relevant 20 features\\Good-Simple time series split\\High Correlation pairs.xlsx").drop(columns  = 'Correlation')
+    
+    # Step 1: Sort by rank (ascending = lowest ranks first)
+    sorted_features = Selected_features.sort_values('rfe_f_stat_mi_perm_rank')
+    
+    # Step 2: Take top 26 (lowest ranks)  
+    top_26 = sorted_features.head(26)
+    
+    # Step 3: Select only needed columns
+    df_Selected_features = top_26[['feature', 'rfe_f_stat_mi_perm_rank']]
+    
+    # Remove correlated pairs
+    final_features, removed, info = remove_correlated_pairs_by_rank(
+        df_Selected_features, 
+        Correlated_Pairs, 
+        feature_col='feature', 
+        rank_col='rfe_f_stat_mi_perm_rank'
+    )
+    
+    feature_list = final_features['feature'].tolist()
+    y_train = df_Train_data['direction_target']
+    X_train = df_Train_data[feature_list]
+    
+    # Run hyperparameter tuning with model saving (NEW FUNCTION!)
+    tuning_results = comprehensive_xgb_svc_tuning_with_saving(
+        X_train, 
+        y_train,
+        save_models=True,  # Enable model saving
+        models_directory="HYG_trained_models"  # Custom directory name
+    )
+    
+    print("🎯 Hyperparameter tuning complete with model saving!")
+    print("📁 Models saved and ready for validation!")
+    print("📋 Next: Create separate validation script to load and test models!")
