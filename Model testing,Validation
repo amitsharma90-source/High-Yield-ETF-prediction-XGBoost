@@ -1,0 +1,293 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Jun 24 18:49:12 2025
+
+@author: amits
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Simple Model Validation Script
+Load saved models and test on validation/test data
+"""
+
+import pandas as pd
+import numpy as np
+import joblib
+import os
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import warnings
+warnings.filterwarnings('ignore')
+
+
+def load_and_validate_model(model_path, X_test, y_test):
+    """
+    Load a saved model and validate on test data
+    
+    Parameters:
+    -----------
+    model_path : str
+        Path to the saved model (.joblib file)
+    X_test : DataFrame
+        Test features
+    y_test : Series
+        Test targets
+    
+    Returns:
+    --------
+    dict : Validation results
+    """
+    
+    print(f"🔍 Loading model from: {model_path}")
+    
+    # Load model package
+    try:
+        package = joblib.load(model_path)
+        model = package['model']
+        metadata = package['metadata']
+        
+        print(f"✅ Model loaded successfully!")
+        print(f"   Model: {metadata['model_name']}")
+        print(f"   Type: {metadata['model_type']}")
+        print(f"   CV Score: {metadata['cv_score']:.4f}")
+        print(f"   Features: {metadata['feature_count']}")
+        
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
+        return None
+    
+    # Validate features
+    expected_features = metadata['feature_names']
+    if list(X_test.columns) != expected_features:
+        print("⚠️ Feature mismatch detected!")
+        print(f"Expected: {len(expected_features)} features")
+        print(f"Provided: {len(X_test.columns)} features")
+        
+        # Try to align features
+        missing_features = set(expected_features) - set(X_test.columns)
+        extra_features = set(X_test.columns) - set(expected_features)
+        
+        if missing_features:
+            print(f"Missing features: {missing_features}")
+            return None
+        
+        if extra_features:
+            print(f"Extra features (will ignore): {extra_features}")
+        
+        # Reorder columns to match training
+        X_test = X_test[expected_features]
+        print("✅ Features aligned successfully!")
+    
+    print(f"\n🧪 Running predictions on {len(X_test)} test samples...")
+    
+    # Make predictions
+    y_pred = model.predict(X_test)
+    y_pred_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, 'predict_proba') else None
+    
+    # Calculate metrics
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    print(f"\n📊 VALIDATION RESULTS")
+    print("="*50)
+    print(f"Test Accuracy: {accuracy:.4f}")
+    print(f"CV Accuracy:   {metadata['cv_score']:.4f}")
+    print(f"Difference:    {accuracy - metadata['cv_score']:.4f}")
+    
+    # Detailed classification report
+    print(f"\n📋 Classification Report:")
+    print(classification_report(y_test, y_pred))
+    
+    # Confusion Matrix
+    cm = confusion_matrix(y_test, y_pred)
+    print(f"\n🔢 Confusion Matrix:")
+    print(f"True Neg: {cm[0,0]}, False Pos: {cm[0,1]}")
+    print(f"False Neg: {cm[1,0]}, True Pos: {cm[1,1]}")
+    
+    results = {
+        'model_name': metadata['model_name'],
+        'model_type': metadata['model_type'],
+        'cv_score': metadata['cv_score'],
+        'test_accuracy': accuracy,
+        'predictions': y_pred,
+        'probabilities': y_pred_proba,
+        'confusion_matrix': cm,
+        'metadata': metadata
+    }
+    
+    return results
+
+
+def validate_all_models(models_directory, X_test, y_test):
+    """
+    Load and validate all models in directory
+    
+    Parameters:
+    -----------
+    models_directory : str
+        Directory containing saved models
+    X_test : DataFrame
+        Test features
+    y_test : Series
+        Test targets
+    
+    Returns:
+    --------
+    dict : Results for all models
+    """
+    
+    print(f"🔍 Looking for models in: {models_directory}")
+    
+    if not os.path.exists(models_directory):
+        print(f"❌ Directory not found: {models_directory}")
+        return {}
+    
+    # Find all model files
+    model_files = [f for f in os.listdir(models_directory) if f.endswith('.joblib')]
+    
+    if not model_files:
+        print(f"❌ No model files found in {models_directory}")
+        return {}
+    
+    print(f"✅ Found {len(model_files)} model(s)")
+    
+    all_results = {}
+    
+    for model_file in model_files:
+        model_path = os.path.join(models_directory, model_file)
+        print(f"\n{'='*60}")
+        
+        results = load_and_validate_model(model_path, X_test, y_test)
+        
+        if results:
+            all_results[results['model_name']] = results
+    
+    # Summary comparison
+    if len(all_results) > 1:
+        print(f"\n🏆 MODEL COMPARISON SUMMARY")
+        print("="*60)
+        
+        comparison_data = []
+        for name, results in all_results.items():
+            comparison_data.append({
+                'Model': name,
+                'CV_Score': results['cv_score'],
+                'Test_Score': results['test_accuracy'],
+                'Difference': results['test_accuracy'] - results['cv_score']
+            })
+        
+        comparison_df = pd.DataFrame(comparison_data)
+        comparison_df = comparison_df.sort_values('Test_Score', ascending=False)
+        print(comparison_df.round(4).to_string(index=False))
+        
+        best_model = comparison_df.iloc[0]['Model']
+        print(f"\n🥇 Best performing model: {best_model}")
+    
+    return all_results
+
+
+def quick_validation(models_directory="HYG_trained_models", test_data_path=None, 
+                    X_test=None, y_test=None, target_column='direction_target'):
+    """
+    Quick validation function - load data and test all models
+    
+    Parameters:
+    -----------
+    models_directory : str
+        Directory with saved models
+    test_data_path : str
+        Path to test data Excel/CSV file (optional if X_test, y_test provided)
+    X_test, y_test : DataFrame, Series
+        Test data (optional if test_data_path provided)
+    target_column : str
+        Name of target column in test data file
+    
+    Returns:
+    --------
+    dict : Validation results
+    """
+    
+    # Load test data if path provided
+    if test_data_path and (X_test is None or y_test is None):
+        print(f"📂 Loading test data from: {test_data_path}")
+        
+        if test_data_path.endswith('.xlsx'):
+            test_data = pd.read_excel(test_data_path)
+        elif test_data_path.endswith('.csv'):
+            test_data = pd.read_csv(test_data_path)
+        else:
+            print("❌ Unsupported file format. Use .xlsx or .csv")
+            return {}
+        
+        y_test = test_data[target_column]
+        X_test = test_data.drop(columns=[target_column])
+        
+        print(f"✅ Test data loaded: {len(X_test)} samples, {len(X_test.columns)} features")
+    
+    # Validate all models
+    results = validate_all_models(models_directory, X_test, y_test)
+    
+    return results
+
+
+# ================================================================
+# USAGE EXAMPLES
+# ================================================================
+
+if __name__ == "__main__":
+    
+    # Example 1: Load test data from file and validate all models
+    print("🚀 EXAMPLE 1: Validate all models with test data from file")
+    print("="*70)
+    
+    # Uncomment and modify path to your test data:
+    results = quick_validation(
+        models_directory="C:\\Users\\amits\\Desktop\\All quant workshop\\OAS prediction\\HYG,JNK prediction steps\\Step-3-Hyperparameter tuning\\Good-Simple time series split 59.45% accuracy\\HYG_trained_models",
+        test_data_path="C:\\Users\\amits\\Desktop\\All quant workshop\\OAS prediction\\HYG,JNK prediction steps\\Step-2-Choose relevant 20 features\\Good-Simple time series split\\All scaled Test Features and Target data.xlsx",
+        target_column="direction_target"
+    )
+    
+    # Example 2: Validate specific model with provided data
+    # print("\n🚀 EXAMPLE 2: Load specific model and validate")
+    # print("="*70)
+    
+    # Load your test data
+    df_test = pd.read_excel("C:\\Users\\amits\\Desktop\\All quant workshop\\OAS prediction\\HYG,JNK prediction steps\\Step-2-Choose relevant 20 features\\Good-Simple time series split\\All scaled Test Features and Target data.xlsx")
+    y_test = df_test['direction_target']
+    X_test = df_test.drop(columns=['direction_target'])
+    
+    # Validate specific model
+    # model_path = "HYG_trained_models/xgboost_model_20241222_143022.joblib"
+    # results = load_and_validate_model(model_path, X_test, y_test)
+    
+    # Example 3: Validate all models with your data
+    print("\n🚀 EXAMPLE 3: Validate all models")
+    print("="*70)
+    
+    all_results = validate_all_models("HYG_trained_models", X_test, y_test)
+    
+    print("\n📋 TO USE THIS SCRIPT:")
+    print("1. Uncomment the example you want to use")
+    print("2. Update file paths to your test data")
+    print("3. Run the script!")
+    print("4. Check the results and model performance!")
+
+
+# ================================================================
+# SIMPLE ONE-LINER FUNCTIONS
+# ================================================================
+
+def validate_best_model(models_directory, X_test, y_test):
+    """One-liner to validate the best model"""
+    results = validate_all_models(models_directory, X_test, y_test)
+    if results:
+        best_model = max(results.items(), key=lambda x: x[1]['test_accuracy'])
+        return best_model[1]
+    return None
+
+def get_predictions(model_path, X_test):
+    """One-liner to get predictions from a model"""
+    package = joblib.load(model_path)
+    model = package['model']
+    expected_features = package['metadata']['feature_names']
+    X_test_aligned = X_test[expected_features]
+    return model.predict(X_test_aligned)
