@@ -41,7 +41,7 @@ for i, ticker in enumerate(tickers):
         params = {
             'function': 'TIME_SERIES_DAILY',
             'symbol': ticker,
-            'apikey': 'RPIGYZ25YDDJPUL6',
+            'apikey': 'XXXXXXXX',
             'outputsize': 'full'  # This gets ALL available data
         }
         
