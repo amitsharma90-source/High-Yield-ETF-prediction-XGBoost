@@ -1,0 +1,304 @@
+# -*- coding: utf-8 -*-
+"""
+Enhanced Feature Engineering for HYG Direction Prediction
+FINAL CORRECTED VERSION: Proper compounding for momentum, percentage return handling
+Created on Mon Jun  2 20:41:41 2025
+@author: amits
+"""
+
+import pandas as pd
+import numpy as np
+import warnings
+import sweetviz as sv
+from ydata_profiling import ProfileReport 
+warnings.filterwarnings('ignore')
+
+Redundant_Features = ['XLE',
+'XLF',
+'XLK',
+'SPY',
+'HYG',
+'JNK',
+'SHY',
+'TLT',
+'BAMLC0A0CM_LAGGED',
+'BAMLH0A0HYM2_LAGGED',
+'VIX_momentum_1d',
+'HY_momentum_1d',
+'IG_momentum_1d',
+'pure_defensive',
+'value_vs_growth',
+'defensive_vs_cyclical',
+'risk_off_signal',
+'equity_credit_divergence_3d',
+'equity_credit_divergence_5d',
+'SPY_vol_5d',
+'SPY_vol_20d'
+]
+
+# Read your Excel file
+print("Reading Excel file...")
+df = pd.read_excel("C:\\Users\\amits\\Desktop\\All quant workshop\\OAS prediction\\HYG,JNK prediction steps\\Step 1-Perform feature engineering\\Features, Predictors, and Predicted X and Y, Extra sectoral ETFs.xlsx")
+print(f"Original dataset: {len(df)} rows, {len(df.columns)} columns")
+
+# Convert Date to datetime, set as index, and sort
+df['Date'] = pd.to_datetime(df['Date'])
+df = df.sort_values('Date').reset_index(drop=True)
+
+# Step 1: Fill NAs and zeros FIRST (as requested)
+print("Filling missing values and zeros...")
+numeric_columns = df.select_dtypes(include=[np.number]).columns
+df[numeric_columns] = df[numeric_columns].replace(0, np.nan)
+df[numeric_columns] = df[numeric_columns].fillna(method='ffill')
+df[numeric_columns] = df[numeric_columns].fillna(method='bfill')
+print("Missing values filled.")
+
+# ====================================================================
+# ENHANCED FEATURE ENGINEERING FOR HYG DIRECTION PREDICTION
+# FINAL: Proper compounding for momentum, correct percentage handling
+# ====================================================================
+
+print("Creating enhanced momentum features with proper compounding...")
+
+# 1. CORRECTED MOMENTUM FEATURES
+# VIX momentum (levels - correct as is)
+df['VIX_momentum_1d'] = df['VIX'].diff(1)
+df['VIX_momentum_3d'] = df['VIX'].diff(3) 
+df['VIX_momentum_5d'] = df['VIX'].diff(5)
+
+# ETF momentum (CORRECTED - using proper compounding for percentage returns)
+df['HYG_momentum_short'] = ((1 + df['HYG_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+df['HYG_momentum_medium'] = ((1 + df['HYG_RETURN']/100).rolling(10).apply(lambda x: x.prod()) - 1) * 100
+df['JNK_momentum_short'] = ((1 + df['JNK_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+df['SPY_momentum_short'] = ((1 + df['SPY_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+df['SPY_momentum_medium'] = ((1 + df['SPY_RETURN']/100).rolling(10).apply(lambda x: x.prod()) - 1) * 100
+
+# Additional momentum features for new ETFs (CORRECTED)
+df['XLP_momentum_short'] = ((1 + df['XLP_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+df['XLU_momentum_short'] = ((1 + df['XLU_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100 if 'XLU_RETURN' in df.columns else 0
+df['XLY_momentum_short'] = ((1 + df['XLY_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+df['IWF_momentum_short'] = ((1 + df['IWF_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+df['IWD_momentum_short'] = ((1 + df['IWD_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+df['MGK_momentum_short'] = ((1 + df['MGK_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+df['MGV_momentum_short'] = ((1 + df['MGV_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+
+# Treasury and credit ETF momentum (CORRECTED)
+if 'LQD_RETURN' in df.columns:
+    df['LQD_momentum_short'] = ((1 + df['LQD_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+
+
+if 'TLT_RETURN' in df.columns:
+    df['TLT_momentum_short'] = ((1 + df['TLT_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+
+
+if 'SHY_RETURN' in df.columns:
+    df['SHY_momentum_short'] = ((1 + df['SHY_RETURN']/100).rolling(3).apply(lambda x: x.prod()) - 1) * 100
+
+
+# Credit spread momentum (levels - correct)
+df['HY_momentum_1d'] = df['BAMLH0A0HYM2'].diff(1)
+df['HY_momentum_3d'] = df['BAMLH0A0HYM2'].diff(3)
+df['HY_momentum_5d'] = df['BAMLH0A0HYM2'].diff(5)
+df['IG_momentum_1d'] = df['BAMLC0A0CM'].diff(1)
+df['IG_momentum_3d'] = df['BAMLC0A0CM'].diff(3)
+df['IG_momentum_5d'] = df['BAMLC0A0CM'].diff(5)
+
+# Acceleration (second derivative)
+df['VIX_acceleration'] = df['VIX_momentum_3d'].diff(2)
+df['HY_acceleration'] = df['HY_momentum_3d'].diff(2)
+
+print("Creating enhanced style and sector rotation features...")
+
+# 2. ENHANCED STYLE ROTATION SIGNALS
+# Pure style rotation (more accurate than XLK-XLF)
+df['growth_vs_value_russell'] = df['IWF_RETURN'] - df['IWD_RETURN']  # Russell 1000
+df['growth_vs_value_mega'] = df['MGK_RETURN'] - df['MGV_RETURN']     # Mega cap
+df['style_consensus'] = (df['growth_vs_value_russell'] + df['growth_vs_value_mega']) / 2
+
+# Enhanced sector rotation
+df['cyclical_vs_defensive'] = df['XLY_RETURN'] - df['XLP_RETURN']    # Consumer discretionary vs staples
+df['tech_vs_financials'] = df['XLK_RETURN'] - df['XLF_RETURN']       # Original (keep for comparison)
+df['risk_on_signal'] = df['XLK_RETURN'] - (df['XLU_RETURN'] if 'XLU_RETURN' in df.columns else df['XLE_RETURN'])
+
+# Economic cycle indicators
+df['economic_optimism'] = (df['XLY_RETURN'] + df['XLF_RETURN'] + df['IWF_RETURN']) / 3  # Cyclical + growth
+# Pure defensive rotation signal
+df['pure_defensive'] = (df['XLU_RETURN'] + df['XLP_RETURN']) / 2
+
+# Style rotation signal (separate)
+df['value_vs_growth'] = df['IWD_RETURN'] - df['IWF_RETURN']
+
+# Economic cycle signal
+df['defensive_vs_cyclical'] = df['pure_defensive'] - df['economic_optimism']
+
+df['defensive_complex'] = (
+    df['XLU_RETURN'] * 0.4 +      # Most defensive
+    df['XLP_RETURN'] * 0.4 +      # Very defensive  
+    df['IWD_RETURN'] * 0.2        # Somewhat defensive (value bias)
+)
+
+# Combined for risk-off detection
+df['risk_off_signal'] = (
+    df['pure_defensive'] * 0.4 +          # True defensives
+    df['value_vs_growth'] * 0.3 +         # Value outperformance  
+    (-df['VIX_momentum_3d']/10) * 0.3     # VIX spike
+)
+df['cycle_divergence'] = df['economic_optimism'] - df['defensive_complex']
+
+print("Creating cross-asset divergence features...")
+
+# 3. ENHANCED CROSS-ASSET DIVERGENCE
+# Core equity-credit divergence (your proven method)
+df['equity_credit_divergence'] = df['SPY_RETURN'] + df['HYG_RETURN']  # Addition captures divergence
+df['equity_credit_divergence_3d'] = df['SPY_RETURN'].rolling(3).mean() + df['HYG_RETURN'].rolling(3).mean()
+df['equity_credit_divergence_5d'] = df['SPY_RETURN'].rolling(5).mean() + df['HYG_RETURN'].rolling(5).mean()
+
+# Enhanced credit relationships
+df['HYG_vs_JNK_divergence'] = df['HYG_RETURN'] - df['JNK_RETURN']    # ETF-specific flows
+if 'LQD_RETURN' in df.columns:
+    df['HYG_vs_LQD_performance'] = df['HYG_RETURN'] - df['LQD_RETURN']   # HY vs IG performance
+
+df['credit_quality_spread'] = df['BAMLH0A0HYM2'] - df['BAMLC0A0CM']  # HY vs IG spread
+
+# Treasury relationships (CORRECTED)
+if 'TLT_RETURN' in df.columns:
+    df['HYG_treasury_spread'] = df['HYG_RETURN'] - df['TLT_RETURN']      # Credit vs risk-free
+
+if 'TLT_RETURN' in df.columns and 'SHY_RETURN' in df.columns:
+    df['duration_proxy'] = df['TLT_RETURN'] - df['SHY_RETURN']           # Yield curve steepness
+
+
+print("Creating volatility and regime detection features...")
+
+# 4. ENHANCED VOLATILITY & REGIME DETECTION
+# Volatility measures (CORRECTED - using percentage returns)
+df['SPY_vol_5d'] = df['SPY_RETURN'].rolling(5).std()
+df['SPY_vol_10d'] = df['SPY_RETURN'].rolling(10).std()
+df['SPY_vol_20d'] = df['SPY_RETURN'].rolling(20).std()
+df['HYG_vol_5d'] = df['HYG_RETURN'].rolling(5).std()
+df['JNK_vol_5d'] = df['JNK_RETURN'].rolling(5).std()
+df['XLY_vol_5d'] = df['XLY_RETURN'].rolling(5).std()
+df['XLP_vol_5d'] = df['XLP_RETURN'].rolling(5).std()
+df['VIX_vol_10d'] = df['VIX'].rolling(10).std()
+
+if 'LQD_RETURN' in df.columns:
+    df['LQD_vol_5d'] = df['LQD_RETURN'].rolling(5).std()
+else:
+    df['LQD_vol_5d'] = 0
+
+# Adaptive regime detection
+df['high_vol_regime'] = (df['SPY_vol_20d'] > df['SPY_vol_20d'].rolling(60).quantile(0.75)).astype(int)
+df['low_vol_regime'] = (df['VIX'] < df['VIX'].rolling(60).quantile(0.25)).astype(int)
+df['VIX_spike'] = (df['VIX'] > 30).astype(int)
+df['VIX_extreme_spike'] = (df['VIX'] > df['VIX'].rolling(60).quantile(0.9)).astype(int)
+
+# Style regime detection
+df['growth_dominance'] = (df['IWF_RETURN'] > df['IWD_RETURN']).astype(int)
+df['cyclical_strength'] = (df['XLY_RETURN'] > df['SPY_RETURN']).astype(int)
+df['mega_cap_leadership'] = ((df['MGK_RETURN'] + df['MGV_RETURN'])/2 > df['SPY_RETURN']).astype(int)
+
+print("Creating mean reversion signals...")
+
+# 5. ENHANCED MEAN REVERSION SIGNALS
+# Z-scores for mean reversion
+df['VIX_zscore'] = (df['VIX'] - df['VIX'].rolling(60).mean()) / df['VIX'].rolling(60).std()
+df['HY_spread_zscore'] = (df['BAMLH0A0HYM2'] - df['BAMLH0A0HYM2'].rolling(60).mean()) / df['BAMLH0A0HYM2'].rolling(60).std()
+df['IG_spread_zscore'] = (df['BAMLC0A0CM'] - df['BAMLC0A0CM'].rolling(60).mean()) / df['BAMLC0A0CM'].rolling(60).std()
+df['style_zscore'] = (df['style_consensus'] - df['style_consensus'].rolling(60).mean()) / df['style_consensus'].rolling(60).std()
+df['HYG_return_zscore'] = (df['HYG_RETURN'] - df['HYG_RETURN'].rolling(60).mean()) / df['HYG_RETURN'].rolling(60).std()
+
+# Extreme readings (reversal signals)
+df['VIX_extreme_high'] = (df['VIX_zscore'] > 1.5).astype(int)
+df['VIX_extreme_low'] = (df['VIX_zscore'] < -1.0).astype(int)
+df['spreads_extreme_wide'] = (df['HY_spread_zscore'] > 1.5).astype(int)
+df['spreads_extreme_tight'] = (df['HY_spread_zscore'] < -1.0).astype(int)
+df['style_extreme'] = (abs(df['style_zscore']) > 1.5).astype(int)
+df['HYG_extreme_move'] = (abs(df['HYG_return_zscore']) > 2.0).astype(int)
+
+print("Creating regime transition and composite signals...")
+
+# 6. REGIME TRANSITION & COMPOSITE SIGNALS
+# Risk regime classification (CORRECTED thresholds for percentage returns)
+df['risk_off_regime'] = (
+    (df['VIX'] > 25) & 
+    (df['SPY_RETURN'] < -0.5) &  # More than -0.5% for SPY
+    (df['HYG_RETURN'] < -0.2)    # More than -0.2% for HYG
+).astype(int)
+
+df['risk_on_regime'] = (
+    (df['VIX'] < 20) & 
+    (df['SPY_RETURN'] > 0.3) &   # More than +0.3% for SPY
+    (df['style_consensus'] > 0)  # Growth outperforming
+).astype(int)
+
+df['regime_transition'] = (
+    (~df['risk_off_regime'].astype(bool)) & 
+    (~df['risk_on_regime'].astype(bool))
+).astype(int)
+
+df['vix_regime'] = pd.cut(df['VIX'], bins=[0, 20, 30, 100], labels=['Low', 'Med', 'High'])
+
+# Enhanced reversal detection
+df['potential_reversal'] = (
+    (df['VIX_extreme_high'] == 1) |
+    (df['spreads_extreme_wide'] == 1) |
+    (df['style_extreme'] == 1) |
+    (df['HYG_extreme_move'] == 1) |
+    ((abs(df['equity_credit_divergence']) > 2.0).astype(int) == 1)  # 2% divergence threshold
+).astype(int)
+
+# Stress escalation
+df['stress_escalation'] = (
+    (df['VIX'] > df['VIX'].shift(1)) & 
+    (df['HYG_RETURN'] < df['SPY_RETURN']) &
+    (df['credit_quality_spread'] > df['credit_quality_spread'].shift(1))
+).astype(int)
+
+print("Creating interaction terms...")
+
+# 7. ENHANCED INTERACTION TERMS
+# VIX interactions
+df['VIX_SPY_interaction'] = df['VIX'] * df['SPY_RETURN']
+df['VIX_HYG_interaction'] = df['VIX'] * df['HYG_RETURN']
+df['VIX_style_interaction'] = df['VIX'] * df['style_consensus']
+
+# Credit spread interactions
+df['spread_VIX_interaction'] = df['BAMLH0A0HYM2'] * df['VIX']
+df['spread_equity_interaction'] = df['BAMLH0A0HYM2'] * df['SPY_RETURN']
+df['spread_momentum_VIX'] = df['HY_momentum_3d'] * df['VIX']
+
+# Cross-volatility interactions
+df['vol_regime_interaction'] = df['SPY_vol_5d'] * df['VIX']
+df['cross_vol_interaction'] = df['SPY_vol_5d'] * df['HYG_vol_5d']
+df['credit_style_interaction'] = df['HYG_RETURN'] * df['style_consensus']
+
+print("Creating momentum and flow indicators...")
+
+# 8. MOMENTUM & FLOW INDICATORS
+# Momentum alignment (CORRECTED thresholds for percentage returns)
+df['risk_on_momentum'] = (
+    (df['HYG_momentum_short'] > 0.5) &   # More than 0.5% cumulative over 3 days
+    (df['SPY_momentum_short'] > 0.5) & 
+    (df['growth_dominance'] == 1)
+).astype(int)
+
+df['risk_off_momentum'] = (
+    (df['HYG_momentum_short'] < -0.5) &   # Less than -0.5% cumulative over 3 days
+    (df['SPY_momentum_short'] < -0.5) & 
+    (df['VIX'] > df['VIX'].shift(1))
+).astype(int)
+
+# Momentum divergence (critical signal) - CORRECTED thresholds
+df['equity_credit_momentum_divergence'] = (
+    (df['SPY_momentum_short'] > 0.5) &    # SPY up more than 0.5%
+    (df['HYG_momentum_short'] < -0.3)     # HYG down more than 0.3%
+).astype(int)
+
+df['sector_momentum_divergence'] = (
+    (df['XLK_RETURN'] > 1.0) &            # Tech up more than 1%
+    (df['XLF_RETURN'] < -1.0)             # Financials down more than 1%
+).astype(int)
+
+df  = df.drop(Redundant_Features, axis = 1)
+
+df.to_csv("Enhanced_Features_Direction_Prediction.csv", index=False)
